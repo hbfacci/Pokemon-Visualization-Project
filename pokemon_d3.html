@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Pokemon Visualization</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+body { margin:0; font-family: Arial,sans-serif; display:flex; flex-direction:column; height:100vh; }
+h1 { text-align:center; margin:20px 0; }
+#controls { text-align:center; margin-bottom:5px; }
+#controls button { margin:0 5px; padding:6px 12px; font-size:1em; cursor:pointer; }
+#container { display:flex; flex:1; padding:10px 30px; gap:30px; }
+#viz { flex:2; border:2px solid #888; border-radius:10px; background:#f5f5f5; position:relative; overflow:hidden; }
+#info { flex:1; border:2px solid #888; border-radius:10px; padding:10px; overflow-y:auto; background:#fff; }
+.type-box { display:inline-block; padding:5px 10px; margin-right:4px; border-radius:4px; color:white; font-size:0.95em; }
+.node-circle { stroke:#333; stroke-width:1px; cursor:pointer; }
+#splatter-toggle { margin-left:10px; }
+.sprite { width:96px; height:96px; margin-bottom:10px; }
+.axis-label { font-size:12px; font-weight:bold; fill:#333; }
+.selectedNode {
+  stroke: white;         /* inner ring */
+  stroke-width: 5px;
+  paint-order: stroke;   /* ensures stroke draws above fill */
+
+  /* outer outline */
+  filter: drop-shadow(0 0 0 black)
+          drop-shadow(0 0 1px black)
+          drop-shadow(0 0 2px black);
+}
+</style>
+</head>
+<body>
+
+<h1>Pokemon Visualization</h1>
+<div id="controls">
+  <button id="graph-btn">Graph View</button>
+  <button id="chord-btn">Chord View</button>
+  <button id="splatter-btn">Splatter View</button>
+  <button id="splatter-toggle" style="display:none;">Toggle Stats</button>
+</div>
+
+<div id="container">
+  <svg id="viz"></svg>
+  <div id="info">
+    <h2>Select a Pokemon</h2>
+    <p>Click a node to see details here.</p>
+  </div>
+</div>
+
+<script>
+const TYPE_COLOR_MAP = {
+  'Normal': '#C4C4C4','Fire': "#F08030",'Water': "#4674E0",'Electric': "#FFEC5F",
+    'Grass': '#78C850','Ice': '#98D8D8','Fighting': "#AA451A",'Poison': '#A040A0',
+    'Ground': '#D4A85F','Flying': "#90B6F0",'Psychic': '#F85888','Bug': '#A8B820',
+    'Rock': '#8B6F23','Ghost': '#705898','Dragon': '#7038F8','Dark': '#705848',
+    'Steel': "#7F92A6",'Fairy': '#EE99AC', 'None': "#000000"
+};
+
+const svg = d3.select("#viz");
+const width = svg.node().clientWidth;
+const height = svg.node().clientHeight;
+const info = d3.select("#info");
+
+// Layers
+const gGraph = svg.append("g").attr("id","graph-group");
+const gChord = svg.append("g").attr("id","chord-group").attr("display","none");
+const gSplatter = svg.append("g").attr("id","splatter-group").attr("display","none");
+const defs = svg.append("defs");
+
+let nodes=[], edges=[], nodeById = new Map();
+let useSpecial=false;
+let splatterX="attack", splatterY="defense";
+let xScale, yScale;
+
+// Load data
+d3.json("pokemon_graph_fixed.json").then(graph => {
+  nodes = graph.nodes;
+  edges = graph.edges;
+  nodeById = new Map(nodes.map(d=>[d.id,d]));
+
+  edges = edges.filter(e => {
+    const src=nodeById.get(e.source);
+    const tgt=nodeById.get(e.target);
+    if(!src||!tgt) return false;
+    e.source=src; e.target=tgt; return true;
+  });
+
+  // create gradients for dual types
+  nodes.forEach(d => {
+    if(d.type2 && d.type2!=="None"){
+      const grad = defs.append("linearGradient").attr("id",`grad-${d.id}`)
+        .attr("x1","0%").attr("y1","0%").attr("x2","100%").attr("y2","0%");
+      grad.append("stop").attr("offset","50%").attr("stop-color",TYPE_COLOR_MAP[d.type1]);
+      grad.append("stop").attr("offset","50%").attr("stop-color",TYPE_COLOR_MAP[d.type2]);
+    }
+  });
+
+  // precompute axis scales using global min/max for all stats
+  const statPairs = [
+    ["attack","defense"],
+    ["special_attack","special_defense"]
+  ];
+  const allX = nodes.flatMap(d=>statPairs.map(p=>d[p[0]]));
+  const allY = nodes.flatMap(d=>statPairs.map(p=>d[p[1]]));
+  xScale = d3.scaleLinear().domain([0,d3.max(allX)]).range([50,width-50]);
+  yScale = d3.scaleLinear().domain([0,d3.max(allY)]).range([height-50,50]);
+
+  drawGraph();
+  drawChord();
+  drawSplatter();
+});
+
+// -------------------- Graph --------------------
+function drawGraph(){
+  gGraph.selectAll("*").remove();
+  const xScaleG=d3.scaleLinear().domain(d3.extent(nodes,d=>d.x)).range([40,width-40]);
+  const yScaleG=d3.scaleLinear().domain(d3.extent(nodes,d=>d.y)).range([40,height-40]);
+
+  gGraph.append("g").attr("stroke","#999").attr("stroke-opacity",0.6)
+    .selectAll("line").data(edges).join("line")
+    .attr("stroke-width",d=>Math.sqrt(d.size||1))
+    .attr("x1",d=>xScaleG(d.source.x)).attr("y1",d=>yScaleG(d.source.y))
+    .attr("x2",d=>xScaleG(d.target.x)).attr("y2",d=>yScaleG(d.target.y));
+
+  gGraph.append("g").selectAll("circle").data(nodes).join("circle")
+    .attr("class","node-circle").attr("r",12)
+    .attr("cx",d=>xScaleG(d.x)).attr("cy",d=>yScaleG(d.y))
+    .attr("fill",d=>d.type2&&d.type2!=="None"?`url(#grad-${d.id})`:TYPE_COLOR_MAP[d.type1])
+    .on("click",(event,d)=>{
+    highlightSelection(d);
+    showDetails(d);
+});
+
+  svg.call(d3.zoom().scaleExtent([0.2,5]).on("zoom", (event)=>{
+    gGraph.attr("transform", event.transform);
+    gGraph.selectAll("circle").attr("r",12/event.transform.k);
+  }));
+}
+
+// -------------------- Chord --------------------
+function drawChord(){
+  gChord.selectAll("*").remove();
+  const types = Array.from(new Set(nodes.flatMap(d=>[d.type1,d.type2].filter(t=>t&&t!=="None"))));
+  const typeIndex = new Map(types.map((t,i)=>[t,i]));
+  const matrix = Array.from({length:types.length},()=>Array(types.length).fill(0));
+  nodes.forEach(d => {
+    if(d.type2 && d.type2!=="None"){
+      matrix[typeIndex.get(d.type1)][typeIndex.get(d.type2)]++;
+      matrix[typeIndex.get(d.type2)][typeIndex.get(d.type1)]++;
+    } else matrix[typeIndex.get(d.type1)][typeIndex.get(d.type1)]++;
+  });
+
+  const outerRadius = Math.min(width,height)/2 - 30;
+  const innerRadius = outerRadius - 20;
+  const chordGroup = gChord.append("g").attr("transform",`translate(${width/2},${height/2})`);
+  const color = d3.scaleOrdinal(types.map(t=>TYPE_COLOR_MAP[t]||"#AAA")).domain(types);
+
+  const chords = d3.chord().padAngle(0.05).sortSubgroups(d3.descending)(matrix);
+  chordGroup.append("g").selectAll("path").data(chords).join("path")
+    .attr("d", d3.ribbon().radius(innerRadius))
+    .attr("fill", d=>color(types[d.target.index]))
+    .attr("stroke","#000")
+    .on("mouseover",(event,d)=>{
+      const typeA = types[d.source.index];
+      const typeB = types[d.target.index];
+      const count = matrix[d.source.index][d.target.index];
+      const dualText = typeA!==typeB?"(dual)":"";
+      info.html(`<h2>Type interaction: ${typeA} → ${typeB} ${dualText}</h2><p>Number of Pokemon: ${count}</p>`);
+    });
+}
+
+// -------------------- Splatter --------------------
+function drawSplatter(){
+  gSplatter.selectAll("*").remove();
+  const xStat = useSpecial?"special_attack":"attack";
+  const yStat = useSpecial?"special_defense":"defense";
+
+  const g = gSplatter.append("g");
+
+  // contour density
+  const densityData = nodes.map(d=>[xScale(d[xStat]),yScale(d[yStat])]);
+  const contours = d3.contourDensity()
+    .x(d=>d[0])
+    .y(d=>d[1])
+    .size([width,height])
+    .bandwidth(20)
+    .thresholds(20)(densityData);
+
+  g.append("g").selectAll("path").data(contours).join("path")
+    .attr("d", d3.geoPath())
+    .attr("fill","steelblue").attr("opacity",0.3).attr("stroke","none");
+
+  // nodes
+  g.append("g").selectAll("circle").data(nodes).join("circle")
+    .attr("cx",d=>xScale(d[xStat]))
+    .attr("cy",d=>yScale(d[yStat]))
+    .attr("r",d=>Math.sqrt(d.hp))
+    .attr("fill",d=>d.type2&&d.type2!=="None"?`url(#grad-${d.id})`:TYPE_COLOR_MAP[d.type1])
+    .attr("stroke","#333").attr("stroke-width",0.5)
+    .on("click",(event,d)=>{
+    highlightSelection(d);
+    showDetails(d);
+});
+
+
+  // axes
+  const xAxis = d3.axisBottom(xScale);
+  const yAxis = d3.axisLeft(yScale);
+
+  g.append("g").attr("transform",`translate(0,${height-50})`).call(xAxis);
+  g.append("g").attr("transform",`translate(50,0)`).call(yAxis);
+
+  // axis labels
+  g.append("text").attr("class","axis-label").attr("x",width/2).attr("y",height-10).attr("text-anchor","middle").text(xStat);
+  g.append("text").attr("class","axis-label").attr("transform",`rotate(-90)`).attr("x",-height/2).attr("y",15).attr("text-anchor","middle").text(yStat);
+}
+
+function highlightSelection(d){
+  d3.selectAll(".node-circle").classed("selectedNode", p => p.id === d.id);
+}
+// -------------------- Detail Viewer --------------------
+function showDetails(d){
+  const type1Color = TYPE_COLOR_MAP[d.type1]||TYPE_COLOR_MAP['None'];
+  const type2Color = d.type2 && d.type2!=="None"? TYPE_COLOR_MAP[d.type2] : null;
+  let typeBoxes = `<span class="type-box" style="background:${type1Color}">${d.type1}</span>`;
+  if(type2Color) typeBoxes+=`<span class="type-box" style="background:${type2Color}">${d.type2}</span>`;
+  const abilityText = [d.ability1,d.ability2].filter(a=>a && a!=="None").join(", ");
+  info.html(`<h2>${d.id} - ${d.display_name}</h2>
+    <img class="sprite" src="${d.sprite}" alt="${d.display_name}" />
+    <div>${typeBoxes}</div>
+    <p><b>Stats:</b> HP ${d.hp}, Atk ${d.attack}, Def ${d.defense}, SpA ${d.special_attack}, SpD ${d.special_defense}, Spe ${d.speed}</p>
+    ${abilityText?`<p><b>Abilities:</b> ${abilityText}</p>`:""}
+    <p><i>${d.mondexentry}</i></p>`);
+}
+
+// -------------------- Button Handlers --------------------
+d3.select("#graph-btn").on("click",()=>{
+  gGraph.attr("display","block");
+  gChord.attr("display","none");
+  gSplatter.attr("display","none");
+  d3.select("#splatter-toggle").style("display","none");
+});
+d3.select("#chord-btn").on("click",()=>{
+  gGraph.attr("display","none");
+  gChord.attr("display","block");
+  gSplatter.attr("display","none");
+  d3.select("#splatter-toggle").style("display","none");
+});
+d3.select("#splatter-btn").on("click",()=>{
+  gGraph.attr("display","none");
+  gChord.attr("display","none");
+  gSplatter.attr("display","block");
+  d3.select("#splatter-toggle").style("display","inline-block");
+});
+d3.select("#splatter-toggle").on("click",()=>{
+  useSpecial = !useSpecial;
+  drawSplatter();
+});
+</script>
+</body>
+</html>
