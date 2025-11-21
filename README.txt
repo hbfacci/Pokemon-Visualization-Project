@@ -24,8 +24,8 @@ It includes a dashboard with three main interactive views:
 
 ## project structure
 
-Hannah_Facci_Final/
-|-- pokemon_d3.html # main d3.js visualization
+Pokemon-Visualization-Project/
+|-- index.html # main d3.js visualization
 |-- graph_script.py # python script for processing CSV into JSON
 |-- pokemon_data.csv # original pokemon dataset
 |-- pokemon_graph_fixed.json # preprocessed JSON for visualization
@@ -83,4 +83,5 @@ each node includes:
 ## author
 
 Hannah Facci
+
 created for DATA 760 Visualization and Communication
